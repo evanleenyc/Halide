@@ -174,7 +174,8 @@
  * You can dynamically add Inputs and Outputs to your Generator via adding a
  * configure() method; if present, it will be called before generate(). It can
  * examine GeneratorParams but it may not examine predeclared Inputs or Outputs;
- * the only thing it should do is call add_input<>() and/or add_output<>().
+ * the only thing it should do is call add_input<>() and/or add_output<>(), or call
+ * set_type()/set_dimensions()/set_array_size() on an Input or Output with an unspecified type.
  * Added inputs will be appended (in order) after predeclared Inputs but before
  * any Outputs; added outputs will be appended after predeclared Outputs.
  *
@@ -258,6 +259,7 @@
  */
 
 #include <algorithm>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -1289,6 +1291,7 @@ class StubInputBuffer {
 
     template<typename T2>
     HALIDE_NO_USER_CODE_INLINE static Parameter parameter_from_buffer(const Buffer<T2> &b) {
+        internal_assert(b.defined());
         user_assert((Buffer<T>::can_convert_from(b)));
         Parameter p(b.type(), true, b.dimensions());
         p.set_buffer(b);
@@ -1316,16 +1319,11 @@ protected:
     void check_scheduled(const char *m) const;
     Target get_target() const;
 
-    explicit StubOutputBufferBase(const Func &f, std::shared_ptr<GeneratorBase> generator)
-        : f(f), generator(std::move(generator)) {
-    }
-    StubOutputBufferBase() = default;
+    StubOutputBufferBase();
+    explicit StubOutputBufferBase(const Func &f, const std::shared_ptr<GeneratorBase> &generator);
 
 public:
-    Realization realize(std::vector<int32_t> sizes) {
-        check_scheduled("realize");
-        return f.realize(std::move(sizes), get_target());
-    }
+    Realization realize(std::vector<int32_t> sizes);
 
     template<typename... Args>
     Realization realize(Args &&...args) {
@@ -1450,6 +1448,10 @@ public:
     const std::vector<Expr> &exprs() const;
 
     virtual ~GIOBase() = default;
+
+    void set_type(const Type &type);
+    void set_dimensions(int dims);
+    void set_array_size(int size);
 
 protected:
     GIOBase(size_t array_size,
@@ -1918,6 +1920,46 @@ public:
 };
 
 template<typename T>
+class GeneratorInput_DynamicScalar : public GeneratorInputImpl<T, Expr> {
+private:
+    using Super = GeneratorInputImpl<T, Expr>;
+
+    static_assert(std::is_same<typename std::remove_all_extents<T>::type, Expr>::value, "GeneratorInput_DynamicScalar is only legal to use with T=Expr for now");
+
+protected:
+    std::string get_c_type() const override {
+        return "Expr";
+    }
+
+public:
+    explicit GeneratorInput_DynamicScalar(const std::string &name)
+        : Super(name, IOKind::Scalar, {}, 0) {
+        user_assert(!std::is_array<T>::value) << "Input<Expr[]> is not allowed";
+    }
+
+    /** You can use this Input as an expression in a halide
+     * function definition */
+    operator Expr() const {
+        this->check_gio_access();
+        return this->exprs().at(0);
+    }
+
+    /** Using an Input as the argument to an external stage treats it
+     * as an Expr */
+    operator ExternFuncArgument() const {
+        this->check_gio_access();
+        return ExternFuncArgument(this->exprs().at(0));
+    }
+
+    void set_estimate(const Expr &value) {
+        this->check_gio_access();
+        for (Parameter &p : this->parameters_) {
+            p.set_estimate(value);
+        }
+    }
+};
+
+template<typename T>
 class GeneratorInput_Scalar : public GeneratorInputImpl<T, Expr> {
 private:
     using Super = GeneratorInputImpl<T, Expr>;
@@ -2096,7 +2138,8 @@ using GeneratorInputImplBase =
         cond<has_static_halide_type_method<TBase>::value, GeneratorInput_Buffer<T>>,
         cond<std::is_same<TBase, Func>::value, GeneratorInput_Func<T>>,
         cond<std::is_arithmetic<TBase>::value, GeneratorInput_Arithmetic<T>>,
-        cond<std::is_scalar<TBase>::value, GeneratorInput_Scalar<T>>>::type;
+        cond<std::is_scalar<TBase>::value, GeneratorInput_Scalar<T>>,
+        cond<std::is_same<TBase, Expr>::value, GeneratorInput_DynamicScalar<T>>>::type;
 
 }  // namespace Internal
 
@@ -2191,6 +2234,7 @@ public:
     // @{
     HALIDE_FORWARD_METHOD(Func, add_trace_tag)
     HALIDE_FORWARD_METHOD(Func, align_bounds)
+    HALIDE_FORWARD_METHOD(Func, align_extent)
     HALIDE_FORWARD_METHOD(Func, align_storage)
     HALIDE_FORWARD_METHOD_CONST(Func, args)
     HALIDE_FORWARD_METHOD(Func, bound)
@@ -2968,7 +3012,6 @@ struct NoRealizations<T, Args...> {
 };
 
 class GeneratorStub;
-class SimpleGeneratorFactory;
 
 // Note that these functions must never return null:
 // if they cannot return a valid Generator, they must assert-fail.
@@ -3151,6 +3194,19 @@ public:
         return p;
     }
 
+    // Create Input<Expr> with dynamic type
+    template<typename T,
+             typename std::enable_if<std::is_same<T, Expr>::value>::type * = nullptr>
+    GeneratorInput<T> *add_input(const std::string &name, const Type &type) {
+        check_exact_phase(GeneratorBase::ConfigureCalled);
+        auto *p = new GeneratorInput<Expr>(name);
+        p->generator = this;
+        p->set_type(type);
+        param_info_ptr->owned_extras.push_back(std::unique_ptr<Internal::GIOBase>(p));
+        param_info_ptr->filter_inputs.push_back(p);
+        return p;
+    }
+
     // Create Output<Buffer> or Output<Func> with dynamic type
     template<typename T,
              typename std::enable_if<!std::is_arithmetic<T>::value>::type * = nullptr>
@@ -3241,6 +3297,8 @@ protected:
     void check_min_phase(Phase expected_phase) const;
     void advance_phase(Phase new_phase);
 
+    void ensure_configure_has_been_called();
+
 private:
     friend void ::Halide::Internal::generator_test();
     friend class GeneratorParamBase;
@@ -3249,7 +3307,6 @@ private:
     friend class GeneratorOutputBase;
     friend class GeneratorParamInfo;
     friend class GeneratorStub;
-    friend class SimpleGeneratorFactory;
     friend class StubOutputBufferBase;
 
     const size_t size;
@@ -3564,7 +3621,10 @@ private:
     // have build() or configure()/generate()/schedule() methods.
 
     void call_configure_impl(double, double) {
-        // Called as a side effect for build()-method Generators; quietly do nothing.
+        pre_configure();
+        // Called as a side effect for build()-method Generators; quietly do nothing
+        // (except for pre_configure(), to advance the phase).
+        post_configure();
     }
 
     template<typename T2 = T,
@@ -3649,7 +3709,6 @@ protected:
 
 private:
     friend void ::Halide::Internal::generator_test();
-    friend class Internal::SimpleGeneratorFactory;
     friend void ::Halide::Internal::generator_test();
     friend class ::Halide::GeneratorContext;
 
@@ -3664,9 +3723,7 @@ namespace Internal {
 
 class RegisterGenerator {
 public:
-    RegisterGenerator(const char *registered_name, GeneratorFactory generator_factory) {
-        Internal::GeneratorRegistry::register_factory(registered_name, std::move(generator_factory));
-    }
+    RegisterGenerator(const char *registered_name, GeneratorFactory generator_factory);
 };
 
 class GeneratorStub : public NamesInterface {

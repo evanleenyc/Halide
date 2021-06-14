@@ -34,8 +34,7 @@ Expr Simplify::visit(const Sub *op, ExprInfo *bounds) {
 
         auto rewrite = IRMatcher::rewriter(IRMatcher::sub(a, b), op->type);
 
-        if (rewrite(c0 - c1, fold(c0 - c1)) ||
-            rewrite(IRMatcher::Overflow() - x, a) ||
+        if (rewrite(IRMatcher::Overflow() - x, a) ||
             rewrite(x - IRMatcher::Overflow(), b) ||
             rewrite(x - 0, x)) {
             return rewrite.result;
@@ -43,7 +42,8 @@ Expr Simplify::visit(const Sub *op, ExprInfo *bounds) {
 
         // clang-format off
         if (EVAL_IN_LAMBDA
-            ((!op->type.is_uint() && rewrite(x - c0, x + fold(-c0), !overflows(-c0))) ||
+            (rewrite(c0 - c1, fold(c0 - c1)) ||
+             (!op->type.is_uint() && rewrite(x - c0, x + fold(-c0), !overflows(-c0))) ||
              rewrite(x - x, 0) || // We want to remutate this just to get better bounds
              rewrite(ramp(x, y, c0) - ramp(z, w, c0), ramp(x - z, y - w, c0)) ||
              rewrite(ramp(x, y, c0) - broadcast(z, c0), ramp(x - z, y, c0)) ||
@@ -96,6 +96,38 @@ Expr Simplify::visit(const Sub *op, ExprInfo *bounds) {
              rewrite(x*y - y*z, (x - z)*y) ||
              rewrite(y*x - z*y, y*(x - z)) ||
              rewrite(y*x - y*z, y*(x - z)) ||
+             rewrite((u + x*y) - z*y, u + (x - z)*y) ||
+             rewrite((u + x*y) - y*z, u + (x - z)*y) ||
+             rewrite((u + y*x) - z*y, u + y*(x - z)) ||
+             rewrite((u + y*x) - y*z, u + y*(x - z)) ||
+             rewrite((u - x*y) - z*y, u - (x + z)*y) ||
+             rewrite((u - x*y) - y*z, u - (x + z)*y) ||
+             rewrite((u - y*x) - z*y, u - y*(x + z)) ||
+             rewrite((u - y*x) - y*z, u - y*(x + z)) ||
+             rewrite((x*y + u) - z*y, u + (x - z)*y) ||
+             rewrite((x*y + u) - y*z, u + (x - z)*y) ||
+             rewrite((y*x + u) - z*y, u + y*(x - z)) ||
+             rewrite((y*x + u) - y*z, u + y*(x - z)) ||
+             rewrite((x*y - u) - z*y, (x - z)*y - u) ||
+             rewrite((x*y - u) - y*z, (x - z)*y - u) ||
+             rewrite((y*x - u) - z*y, y*(x - z) - u) ||
+             rewrite((y*x - u) - y*z, y*(x - z) - u) ||
+             rewrite(x*y - (u + z*y), (x - z)*y - u) ||
+             rewrite(x*y - (u + y*z), (x - z)*y - u) ||
+             rewrite(y*x - (u + z*y), y*(x - z) - u) ||
+             rewrite(y*x - (u + y*z), y*(x - z) - u) ||
+             rewrite(x*y - (u - z*y), (x + z)*y - u) ||
+             rewrite(x*y - (u - y*z), (x + z)*y - u) ||
+             rewrite(y*x - (u - z*y), y*(x + z) - u) ||
+             rewrite(y*x - (u - y*z), y*(x + z) - u) ||
+             rewrite(x*y - (z*y + u), (x - z)*y - u) ||
+             rewrite(x*y - (y*z + u), (x - z)*y - u) ||
+             rewrite(y*x - (z*y + u), y*(x - z) - u) ||
+             rewrite(y*x - (y*z + u), y*(x - z) - u) ||
+             rewrite(x*y - (z*y - u), (x - z)*y + u) ||
+             rewrite(x*y - (y*z - u), (x - z)*y + u) ||
+             rewrite(y*x - (z*y - u), y*(x - z) + u) ||
+             rewrite(y*x - (y*z - u), y*(x - z) + u) ||
              rewrite((x + y) - (x + z), y - z) ||
              rewrite((x + y) - (z + x), y - z) ||
              rewrite((y + x) - (x + z), y - z) ||
@@ -105,8 +137,42 @@ Expr Simplify::visit(const Sub *op, ExprInfo *bounds) {
              rewrite((z + (x + y)) - x, z + y) ||
              rewrite((z + (y + x)) - x, z + y) ||
 
+             rewrite(x - (y + (x - z)), z - y) ||
+             rewrite(x - ((x - y) + z), y - z) ||
+             rewrite((x + (y - z)) - y, x - z) ||
+             rewrite(((x - y) + z) - x, z - y) ||
+
+             rewrite(x - (y + (x + z)), 0 - (y + z)) ||
+             rewrite(x - (y + (z + x)), 0 - (y + z)) ||
+             rewrite(x - ((x + y) + z), 0 - (y + z)) ||
+             rewrite(x - ((y + x) + z), 0 - (y + z)) ||
+             rewrite((x + y) - (z + (w + x)), y - (z + w)) ||
+             rewrite((x + y) - (z + (w + y)), x - (z + w)) ||
+             rewrite((x + y) - (z + (x + w)), y - (z + w)) ||
+             rewrite((x + y) - (z + (y + w)), x - (z + w)) ||
+             rewrite((x + y) - ((x + z) + w), y - (z + w)) ||
+             rewrite((x + y) - ((y + z) + w), x - (z + w)) ||
+             rewrite((x + y) - ((z + x) + w), y - (z + w)) ||
+             rewrite((x + y) - ((z + y) + w), x - (z + w)) ||
+
              rewrite((x - y) - (x + z), 0 - y - z) ||
              rewrite((x - y) - (z + x), 0 - y - z) ||
+
+             rewrite(((x + y) - z) - x, y - z) ||
+             rewrite(((x + y) - z) - y, x - z) ||
+
+             rewrite(x - min(x - y, 0), max(x, y)) ||
+             rewrite(x - max(x - y, 0), min(x, y)) ||
+             rewrite((x + y) - min(x, y), max(y, x)) ||
+             rewrite((x + y) - min(y, x), max(y, x)) ||
+             rewrite((x + y) - max(x, y), min(y, x)) ||
+             rewrite((x + y) - max(y, x), min(x, y)) ||
+
+             rewrite(0 - (x + (y - z)), z - (x + y)) ||
+             rewrite(0 - ((x - y) + z), y - (x + z)) ||
+             rewrite(((x - y) - z) - x, 0 - (y + z)) ||
+
+             rewrite(x - x%c0, (x/c0)*c0) ||
 
              (no_overflow(op->type) &&
               (rewrite(max(x, y) - x, max(y - x, 0)) ||
@@ -119,11 +185,23 @@ Expr Simplify::visit(const Sub *op, ExprInfo *bounds) {
                rewrite(y - max(x, y), min(y - x, 0), !is_const(y)) ||
                rewrite(y - min(x, y), max(y - x, 0), !is_const(y)) ||
 
+               rewrite(x - min(y, x - z), max(x - y, z)) ||
+               rewrite(x - min(x - y, z), max(y, x - z)) ||
+               rewrite(x - max(y, x - z), min(x - y, z)) ||
+               rewrite(x - max(x - y, z), min(y, x - z)) ||
+
+               rewrite(min(x - y, 0) - x, 0 - max(x, y)) ||
+               rewrite(max(x - y, 0) - x, 0 - min(x, y)) ||
+               rewrite(min(x, y) - (x + y), 0 - max(y, x)) ||
+               rewrite(min(x, y) - (y + x), 0 - max(x, y)) ||
+               rewrite(max(x, y) - (x + y), 0 - min(x, y)) ||
+               rewrite(max(x, y) - (y + x), 0 - min(y, x)) ||
+
                // Negate a clamped subtract
-               rewrite(0 - max(x - y, c0), min(y - x, fold(-c0))) ||
-               rewrite(0 - min(x - y, c0), max(y - x, fold(-c0))) ||
-               rewrite(0 - max(min(x - y, c0), c1), min(max(y - x, fold(-c0)), fold(-c1))) ||
-               rewrite(0 - min(max(x - y, c0), c1), max(min(y - x, fold(-c0)), fold(-c1))) ||
+               rewrite(z - max(x - y, c0), z + min(y - x, fold(-c0))) ||
+               rewrite(z - min(x - y, c0), z + max(y - x, fold(-c0))) ||
+               rewrite(z - max(min(x - y, c0), c1), z + min(max(y - x, fold(-c0)), fold(-c1))) ||
+               rewrite(z - min(max(x - y, c0), c1), z + max(min(y - x, fold(-c0)), fold(-c1))) ||
 
                rewrite(x*y - x, x*(y - 1)) ||
                rewrite(x*y - y, (x - 1)*y) ||

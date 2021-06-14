@@ -60,7 +60,7 @@ LLVM_LIBDIR = $(shell $(LLVM_CONFIG) --libdir | sed -e 's/\\/\//g' -e 's/\([a-zA
 # Apparently there is no llvm_config flag to get canonical paths to tools,
 # so we'll just construct one relative to --src-root and hope that is stable everywhere.
 LLVM_GIT_LLD_INCLUDE_DIR = $(shell $(LLVM_CONFIG) --src-root | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g')/../lld/include
-LLVM_SYSTEM_LIBS=$(shell ${LLVM_CONFIG} --system-libs --link-static | sed -e 's/[\/&]/\\&/g')
+LLVM_SYSTEM_LIBS=$(shell ${LLVM_CONFIG} --system-libs --link-static | sed -e 's/[\/&]/\\&/g' | sed 's/-llibxml2.tbd/-lxml2/')
 LLVM_AS = $(LLVM_BINDIR)/llvm-as
 LLVM_NM = $(LLVM_BINDIR)/llvm-nm
 LLVM_CXX_FLAGS = -std=c++11  $(filter-out -O% -g -fomit-frame-pointer -pedantic -W% -W, $(shell $(LLVM_CONFIG) --cxxflags | sed -e 's/\\/\//g' -e 's/\([a-zA-Z]\):/\/\1/g;s/-D/ -D/g;s/-O/ -O/g')) -I$(LLVM_GIT_LLD_INCLUDE_DIR)
@@ -259,8 +259,7 @@ TUTORIAL_CXX_FLAGS ?= -std=c++11 -g -fno-omit-frame-pointer $(RTTI_CXX_FLAGS) -I
 # Also allow tests, via conditional compilation, to use the entire
 # capability of the CPU being compiled on via -march=native. This
 # presumes tests are run on the same machine they are compiled on.
-ARCH_FOR_TESTS ?= native
-TEST_CXX_FLAGS ?= $(TUTORIAL_CXX_FLAGS) $(CXX_WARNING_FLAGS) -march=${ARCH_FOR_TESTS}
+TEST_CXX_FLAGS ?= $(TUTORIAL_CXX_FLAGS) $(CXX_WARNING_FLAGS)
 TEST_LD_FLAGS = -L$(BIN_DIR) -lHalide $(COMMON_LD_FLAGS)
 
 # In the tests, some of our expectations change depending on the llvm version
@@ -422,7 +421,6 @@ SOURCE_FILES = \
   CodeGen_C.cpp \
   CodeGen_D3D12Compute_Dev.cpp \
   CodeGen_GPU_Dev.cpp \
-  CodeGen_GPU_Host.cpp \
   CodeGen_Hexagon.cpp \
   CodeGen_Internal.cpp \
   CodeGen_LLVM.cpp \
@@ -498,6 +496,7 @@ SOURCE_FILES = \
   ModulusRemainder.cpp \
   Monotonic.cpp \
   ObjectInstanceRegistry.cpp \
+  OffloadGPULoops.cpp \
   OutputImageParam.cpp \
   ParallelRVar.cpp \
   Parameter.cpp \
@@ -514,6 +513,7 @@ SOURCE_FILES = \
   RDom.cpp \
   Realization.cpp \
   RealizationOrder.cpp \
+  RebaseLoopsToZero.cpp \
   Reduction.cpp \
   RegionCosts.cpp \
   RemoveDeadAllocations.cpp \
@@ -591,24 +591,18 @@ HEADER_FILES = \
   Buffer.h \
   CanonicalizeGPUVars.h \
   Closure.h \
-  CodeGen_ARM.h \
   CodeGen_C.h \
   CodeGen_D3D12Compute_Dev.h \
   CodeGen_GPU_Dev.h \
-  CodeGen_GPU_Host.h \
   CodeGen_Internal.h \
   CodeGen_LLVM.h \
   CodeGen_Metal_Dev.h \
-  CodeGen_MIPS.h \
   CodeGen_OpenCL_Dev.h \
   CodeGen_OpenGLCompute_Dev.h \
   CodeGen_Posix.h \
-  CodeGen_PowerPC.h \
   CodeGen_PTX_Dev.h \
   CodeGen_PyTorch.h \
-  CodeGen_RISCV.h \
-  CodeGen_WebAssembly.h \
-  CodeGen_X86.h \
+  CodeGen_Targets.h \
   CompilerLogger.h \
   ConciseCasts.h \
   CPlusPlusMangle.h \
@@ -679,6 +673,7 @@ HEADER_FILES = \
   ModulusRemainder.h \
   Monotonic.h \
   ObjectInstanceRegistry.h \
+  OffloadGPULoops.h \
   OutputImageParam.h \
   ParallelRVar.h \
   Param.h \
@@ -695,6 +690,7 @@ HEADER_FILES = \
   Realization.h \
   RDom.h \
   RealizationOrder.h \
+  RebaseLoopsToZero.h \
   Reduction.h \
   RegionCosts.h \
   RemoveDeadAllocations.h \
@@ -929,7 +925,7 @@ LIBHALIDE_SONAME_FLAGS=
 endif
 
 ifeq ($(UNAME), Linux)
-LIBHALIDE_EXPORTS=-Wl,--version-script=$(ROOT_DIR)/src/exported_symbols.linux
+LIBHALIDE_EXPORTS=-Wl,--version-script=$(ROOT_DIR)/src/exported_symbols.ldscript
 else
 LIBHALIDE_EXPORTS=-Wl,-exported_symbols_list $(ROOT_DIR)/src/exported_symbols.osx
 endif
@@ -1052,7 +1048,7 @@ $(BUILD_DIR)/initmod.windows_%_64_debug.ll: $(SRC_DIR)/runtime/windows_%.cpp $(B
 
 $(BUILD_DIR)/initmod.%_64_debug.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
 	@mkdir -p $(@D)
-	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -m64 -target  $(RUNTIME_TRIPLE_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_64_debug.d
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME $(RUNTIME_CXX_FLAGS) -fpic -m64 -target  $(RUNTIME_TRIPLE_64) -DCOMPILING_HALIDE_RUNTIME -DBITS_64 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_64_debug.d
 
 $(BUILD_DIR)/initmod.windows_%_32_debug.ll: $(SRC_DIR)/runtime/windows_%.cpp $(BUILD_DIR)/clang_ok
 	@mkdir -p $(@D)
@@ -1060,7 +1056,7 @@ $(BUILD_DIR)/initmod.windows_%_32_debug.ll: $(SRC_DIR)/runtime/windows_%.cpp $(B
 
 $(BUILD_DIR)/initmod.%_32_debug.ll: $(SRC_DIR)/runtime/%.cpp $(BUILD_DIR)/clang_ok
 	@mkdir -p $(@D)
-	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME -O3 $(RUNTIME_CXX_FLAGS) -m32 -target $(RUNTIME_TRIPLE_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_32_debug.d
+	$(CLANG) $(CXX_WARNING_FLAGS) -g -DDEBUG_RUNTIME -O3 $(RUNTIME_CXX_FLAGS) -fpic -m32 -target $(RUNTIME_TRIPLE_32) -DCOMPILING_HALIDE_RUNTIME -DBITS_32 -emit-llvm -S $(SRC_DIR)/runtime/$*.cpp -o $@ -MMD -MP -MF $(BUILD_DIR)/initmod.$*_32_debug.d
 
 $(BUILD_DIR)/initmod.%_ll.ll: $(SRC_DIR)/runtime/%.ll
 	@mkdir -p $(@D)
@@ -1092,7 +1088,7 @@ $(BUILD_DIR)/initmod_ptx.%_ll.o: $(BUILD_DIR)/initmod_ptx.%_ll.cpp
 $(BUILD_DIR)/initmod.%.o: $(BUILD_DIR)/initmod.%.cpp
 	$(CXX) -c $< -o $@ -MMD -MP -MF $(BUILD_DIR)/$*.d -MT $(BUILD_DIR)/$*.o
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(SRC_DIR)/%.h $(BUILD_DIR)/llvm_ok
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(BUILD_DIR)/llvm_ok
 	@mkdir -p $(@D)
 	$(CXX) $(CXX_FLAGS) -c $< -o $@ -MMD -MP -MF $(BUILD_DIR)/$*.d -MT $(BUILD_DIR)/$*.o
 
@@ -1456,6 +1452,7 @@ METADATA_TESTER_GENERATOR_ARGS=\
 	buffer_array_input8.dim=3 \
 	buffer_array_input8.type=float32 \
 	buffer_f16_untyped.type=float16 \
+	untyped_scalar_input.type=uint8 \
 	array_outputs.size=2 \
 	array_outputs7.size=2 \
 	array_outputs8.size=2 \
@@ -1569,7 +1566,7 @@ $(FILTERS_DIR)/gpu_multi_context_threaded_%.a: $(BIN_DIR)/gpu_multi_context_thre
 	@mkdir -p $(@D)
 	$(CURDIR)/$< -g gpu_multi_context_threaded_$* $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime-user_context
 
-GEN_AOT_CXX_FLAGS=$(TEST_CXX_FLAGS) -Wno-unknown-pragmas
+GEN_AOT_CXX_FLAGS=$(TEST_CXX_FLAGS) -Wno-unknown-pragmas -Wno-unused-variable
 GEN_AOT_INCLUDES=-I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I$(ROOT_DIR)/src/runtime -I$(ROOT_DIR)/test/common -I $(ROOT_DIR)/apps/support -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools
 GEN_AOT_LD_FLAGS=$(COMMON_LD_FLAGS)
 
@@ -2001,6 +1998,24 @@ build_apps: $(BUILD_APPS_DEPS)
 test_apps: $(BUILD_APPS_DEPS)
 	$(MAKE) -f $(THIS_MAKEFILE) -j1 $(TEST_APPS_DEPS)
 
+build_hannk: distrib
+	@echo Building apps/hannk for ${HL_TARGET}...
+	@$(MAKE) -C $(ROOT_DIR)/apps/hannk build \
+		HALIDE_DISTRIB_PATH=$(CURDIR)/$(DISTRIB_DIR) \
+		HALIDE_PYTHON_BINDINGS_PATH=$(CURDIR)/$(BIN_DIR)/python3_bindings \
+		BIN_DIR=$(CURDIR)/$(BIN_DIR)/apps/hannk/bin \
+		HL_TARGET=$(HL_TARGET) \
+		|| exit 1 ; \
+
+test_hannk: build_hannk
+	@echo Testing apps/hannk for ${HL_TARGET}...
+	@$(MAKE) -C $(ROOT_DIR)/apps/hannk test \
+		HALIDE_DISTRIB_PATH=$(CURDIR)/$(DISTRIB_DIR) \
+		HALIDE_PYTHON_BINDINGS_PATH=$(CURDIR)/$(BIN_DIR)/python3_bindings \
+		BIN_DIR=$(CURDIR)/$(BIN_DIR)/apps/hannk/bin \
+		HL_TARGET=$(HL_TARGET) \
+		|| exit 1 ; \
+
 BENCHMARK_APPS=\
 	bilateral_grid \
 	camera_pipe \
@@ -2134,7 +2149,7 @@ $(BUILD_DIR)/clang_ok:
 	@exit 1
 endif
 
-ifneq (,$(findstring $(LLVM_VERSION_TIMES_10), 100 110 111 120 130))
+ifneq (,$(findstring $(LLVM_VERSION_TIMES_10), 110 111 120 130))
 LLVM_OK=yes
 endif
 

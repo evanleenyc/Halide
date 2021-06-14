@@ -526,9 +526,10 @@ struct Call : public ExprNode<Call> {
         make_struct,
         memoize_expr,
         mod_round_to_zero,
-        mulhi_shr,  // Compute high_half(arg[0] * arg[1]) >> arg[3]. Note that this is a shift in addition to taking the upper half of multiply result. arg[3] must be an unsigned integer immediate.
+        mul_shift_right,
         mux,
         popcount,
+        predicate,
         prefetch,
         promise_clamped,
         random,
@@ -540,6 +541,7 @@ struct Call : public ExprNode<Call> {
         rewrite_buffer,
         rounding_halving_add,
         rounding_halving_sub,
+        rounding_mul_shift_right,
         rounding_shift_left,
         rounding_shift_right,
         saturating_add,
@@ -554,6 +556,7 @@ struct Call : public ExprNode<Call> {
         strict_float,
         stringify,
         undef,
+        unreachable,
         unsafe_promise_clamped,
         widening_add,
         widening_mul,
@@ -659,6 +662,10 @@ struct Call : public ExprNode<Call> {
             }
         }
         return nullptr;
+    }
+
+    static const Call *as_tag(const Expr &e) {
+        return as_intrinsic(e, {Call::likely, Call::likely_if_innermost, Call::predicate, Call::strict_float});
     }
 
     bool is_extern() const {
@@ -867,6 +874,7 @@ struct VectorReduce : public ExprNode<VectorReduce> {
     // operators.
     typedef enum {
         Add,
+        SaturatingAdd,
         Mul,
         Min,
         Max,

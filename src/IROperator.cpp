@@ -118,7 +118,7 @@ bool is_no_op(const Stmt &s) {
         return true;
     }
     const Evaluate *e = s.as<Evaluate>();
-    return e && is_const(e->value);
+    return e && is_pure(e->value);
 }
 
 namespace {
@@ -398,6 +398,11 @@ Expr make_two(Type t) {
 Expr make_signed_integer_overflow(Type type) {
     static std::atomic<int> counter{0};
     return Call::make(type, Call::signed_integer_overflow, {counter++}, Call::Intrinsic);
+}
+
+bool is_signed_integer_overflow(const Expr &expr) {
+    const Call *call = expr.as<Call>();
+    return call && call->is_intrinsic(Call::signed_integer_overflow);
 }
 
 Expr const_true(int w) {
@@ -1035,6 +1040,19 @@ Stmt remove_likelies(const Stmt &s) {
     return RemoveLikelies().mutate(s);
 }
 
+Expr unwrap_tags(const Expr &e) {
+    if (const Call *tag = Call::as_tag(e)) {
+        return unwrap_tags(tag->args[0]);
+    }
+    return e;
+}
+
+Expr predicate(Expr e) {
+    Type t = e.type();
+    return Internal::Call::make(t, Internal::Call::predicate,
+                                {std::move(e)}, Internal::Call::PureIntrinsic);
+}
+
 Expr requirement_failed_error(Expr condition, const std::vector<Expr> &args) {
     return Internal::Call::make(Int(32),
                                 "halide_error_requirement_failed",
@@ -1052,12 +1070,14 @@ Expr memoize_tag_helper(Expr result, const std::vector<Expr> &cache_key_values) 
 }
 
 Expr widening_add(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "widening_add of undefined Expr\n";
     match_types(a, b);
     Type wide_type = a.type().widen();
     return Call::make(wide_type, Call::widening_add, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr widening_mul(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "widening_mul of undefined Expr\n";
     // Widening multiplies can have different signs.
     match_bits(a, b);
     match_lanes(a, b);
@@ -1069,6 +1089,7 @@ Expr widening_mul(Expr a, Expr b) {
 }
 
 Expr widening_sub(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "widening_sub of undefined Expr\n";
     match_types(a, b);
     Type wide_type = a.type().widen();
     if (wide_type.is_uint()) {
@@ -1079,67 +1100,163 @@ Expr widening_sub(Expr a, Expr b) {
 }
 
 Expr widening_shift_left(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "widening_shift_left of undefined Expr\n";
     match_lanes(a, b);
     match_bits(a, b);
     Type wide_type = a.type().widen();
     return Call::make(wide_type, Call::widening_shift_left, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
+Expr widening_shift_left(Expr a, int b) {
+    user_assert(a.defined()) << "widening_shift_left of undefined Expr\n";
+    Type bt = a.type().with_code(halide_type_uint);
+    if (b >= 0) {
+        check_representable(bt, b);
+        return widening_shift_left(std::move(a), make_const(bt, b));
+    } else {
+        check_representable(bt, -b);
+        return widening_shift_right(std::move(a), make_const(bt, -b));
+    }
+}
+
 Expr widening_shift_right(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "widening_shift_right of undefined Expr\n";
     match_lanes(a, b);
     match_bits(a, b);
     Type wide_type = a.type().widen();
     return Call::make(wide_type, Call::widening_shift_right, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
+Expr widening_shift_right(Expr a, int b) {
+    user_assert(a.defined()) << "widening_shift_right of undefined Expr\n";
+    Type bt = a.type().with_code(halide_type_uint);
+    if (b >= 0) {
+        check_representable(bt, b);
+        return widening_shift_right(std::move(a), make_const(bt, b));
+    } else {
+        check_representable(bt, -b);
+        return widening_shift_left(std::move(a), make_const(bt, -b));
+    }
+}
+
 Expr rounding_shift_right(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "rounding_shift_right of undefined Expr\n";
     match_lanes(a, b);
     match_bits(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::rounding_shift_right, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
+Expr rounding_shift_right(Expr a, int b) {
+    user_assert(a.defined()) << "rounding_shift_right of undefined Expr\n";
+    Type bt = a.type().with_code(halide_type_uint);
+    if (b >= 0) {
+        check_representable(bt, b);
+        return rounding_shift_right(std::move(a), make_const(bt, b));
+    } else {
+        check_representable(bt, -b);
+        return rounding_shift_left(std::move(a), make_const(bt, -b));
+    }
+}
+
 Expr rounding_shift_left(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "rounding_shift_left of undefined Expr\n";
     match_lanes(a, b);
     match_bits(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::rounding_shift_left, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
+Expr rounding_shift_left(Expr a, int b) {
+    user_assert(a.defined()) << "rounding_shift_left of undefined Expr\n";
+    Type bt = a.type().with_code(halide_type_uint);
+    if (b >= 0) {
+        check_representable(bt, b);
+        return rounding_shift_left(std::move(a), make_const(bt, b));
+    } else {
+        check_representable(bt, -b);
+        return rounding_shift_right(std::move(a), make_const(bt, -b));
+    }
+}
+
 Expr saturating_add(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "saturating_add of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::saturating_add, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr saturating_sub(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "saturating_sub of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::saturating_sub, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr halving_add(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "halving_add of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::halving_add, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr rounding_halving_add(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "rounding_halving_add of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::rounding_halving_add, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr halving_sub(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "halving_sub of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::halving_sub, {std::move(a), std::move(b)}, Call::PureIntrinsic);
 }
 
 Expr rounding_halving_sub(Expr a, Expr b) {
+    user_assert(a.defined() && b.defined()) << "rounding_halving_sub of undefined Expr\n";
     match_types(a, b);
     Type result_type = a.type();
     return Call::make(result_type, Call::rounding_halving_sub, {std::move(a), std::move(b)}, Call::PureIntrinsic);
+}
+
+Expr mul_shift_right(Expr a, Expr b, Expr q) {
+    user_assert(a.defined() && b.defined() && q.defined()) << "mul_shift_right of undefined Expr\n";
+    user_assert(q.type().is_uint()) << "mul_shift_right shift must be unsigned\n";
+    match_types(a, b);
+    match_lanes(a, q);
+    match_bits(a, q);
+    // q might have widened the bits or lanes of a.
+    match_types(a, b);
+    Type result_type = a.type();
+    return Call::make(result_type, Call::mul_shift_right, {std::move(a), std::move(b), std::move(q)}, Call::PureIntrinsic);
+}
+
+Expr mul_shift_right(Expr a, Expr b, int q) {
+    user_assert(a.defined() && b.defined()) << "mul_shift_right of undefined Expr\n";
+    Type qt = a.type().with_code(halide_type_uint);
+    check_representable(qt, q);
+    return mul_shift_right(std::move(a), std::move(b), make_const(qt, q));
+}
+
+Expr rounding_mul_shift_right(Expr a, Expr b, Expr q) {
+    user_assert(a.defined() && b.defined() && q.defined()) << "rounding_mul_shift_right of undefined Expr\n";
+    user_assert(q.type().is_uint()) << "rounding_mul_shift_right shift must be unsigned\n";
+    match_types(a, b);
+    match_lanes(a, q);
+    match_bits(a, q);
+    // q might have widened the bits or lanes of a.
+    match_types(a, b);
+    Type result_type = a.type();
+    return Call::make(result_type, Call::rounding_mul_shift_right, {std::move(a), std::move(b), std::move(q)}, Call::PureIntrinsic);
+}
+
+Expr rounding_mul_shift_right(Expr a, Expr b, int q) {
+    user_assert(a.defined() && b.defined()) << "rounding_mul_shift_right of undefined Expr\n";
+    Type qt = a.type().with_code(halide_type_uint);
+    check_representable(qt, q);
+    return rounding_mul_shift_right(std::move(a), std::move(b), make_const(qt, q));
 }
 
 }  // namespace Internal
@@ -2475,6 +2592,14 @@ Expr undef(Type t) {
                                 std::vector<Expr>(),
                                 Internal::Call::PureIntrinsic);
 }
+
+namespace Internal {
+Expr unreachable(Type t) {
+    return Internal::Call::make(t, Internal::Call::unreachable,
+                                std::vector<Expr>(),
+                                Internal::Call::Intrinsic);
+}
+}  // namespace Internal
 
 namespace {
 Expr make_scatter_gather(const std::vector<Expr> &args) {

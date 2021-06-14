@@ -91,20 +91,20 @@ void unpack_closure(const Closure &closure,
     int idx = 0;
     for (const auto &v : closure.vars) {
         Value *ptr = builder->CreateConstInBoundsGEP2_32(type, src, 0, idx++);
-        LoadInst *load = builder->CreateLoad(ptr);
+        LoadInst *load = builder->CreateLoad(ptr->getType()->getPointerElementType(), ptr);
         dst.push(v.first, load);
         load->setName(v.first);
     }
     for (const auto &b : closure.buffers) {
         {
             Value *ptr = builder->CreateConstInBoundsGEP2_32(type, src, 0, idx++);
-            LoadInst *load = builder->CreateLoad(ptr);
+            LoadInst *load = builder->CreateLoad(ptr->getType()->getPointerElementType(), ptr);
             dst.push(b.first, load);
             load->setName(b.first);
         }
         {
             Value *ptr = builder->CreateConstInBoundsGEP2_32(type, src, 0, idx++);
-            LoadInst *load = builder->CreateLoad(ptr);
+            LoadInst *load = builder->CreateLoad(ptr->getType()->getPointerElementType(), ptr);
             dst.push(b.first + ".buffer", load);
             load->setName(b.first + ".buffer");
         }
@@ -168,13 +168,9 @@ llvm::Type *get_vector_element_type(llvm::Type *t) {
 llvm::ElementCount element_count(int e) {
     return llvm::ElementCount::getFixed(e);
 }
-#elif LLVM_VERSION >= 110
+#else
 llvm::ElementCount element_count(int e) {
     return llvm::ElementCount(e, /*scalable*/ false);
-}
-#else
-int element_count(int e) {
-    return e;
 }
 #endif
 
@@ -289,7 +285,8 @@ Expr lower_int_uint_div(const Expr &a, const Expr &b) {
                *const_int_divisor > 1 &&
                ((t.bits() > 8 && *const_int_divisor < 256) || *const_int_divisor < 128)) {
 
-        int64_t multiplier, shift;
+        int64_t multiplier;
+        int shift;
         if (t.bits() == 32) {
             multiplier = IntegerDivision::table_s32[*const_int_divisor][2];
             shift = IntegerDivision::table_s32[*const_int_divisor][3];
@@ -314,8 +311,7 @@ Expr lower_int_uint_div(const Expr &a, const Expr &b) {
         // Multiply and keep the high half of the
         // result, and then apply the shift.
         Expr mult = make_const(num.type(), multiplier);
-        num = Call::make(num.type(), Call::mulhi_shr, {num, mult, make_const(UInt(num.type().bits()), shift)},
-                         Call::PureIntrinsic);
+        num = mul_shift_right(num, mult, shift + num.type().bits());
 
         // Maybe flip the bits back again.
         num = cast(a.type(), num ^ sign);
@@ -347,9 +343,7 @@ Expr lower_int_uint_div(const Expr &a, const Expr &b) {
 
         // Widen, multiply, narrow
         Expr mult = make_const(num.type(), multiplier);
-        Expr val = Call::make(num.type(), Call::mulhi_shr,
-                              {num, mult, make_const(UInt(num.type().bits()), method == 1 ? (int)shift : 0)},
-                              Call::PureIntrinsic);
+        Expr val = mul_shift_right(num, mult, (method == 1 ? shift : 0) + num.type().bits());
 
         if (method == 2) {
             // Average with original numerator.
@@ -655,11 +649,7 @@ bool get_md_string(llvm::Metadata *value, std::string &result) {
     }
     llvm::MDString *c = llvm::dyn_cast<llvm::MDString>(value);
     if (c) {
-#if LLVM_VERSION >= 110
         result = c->getString().str();
-#else
-        result = c->getString();
-#endif
         return true;
     }
     return false;
@@ -761,7 +751,11 @@ void set_function_attributes_for_target(llvm::Function *fn, const Target &t) {
 void embed_bitcode(llvm::Module *M, const string &halide_command) {
     // Save llvm.compiler.used and remote it.
     SmallVector<Constant *, 2> used_array;
+#if LLVM_VERSION >= 130
+    SmallVector<GlobalValue *, 4> used_globals;
+#else
     SmallPtrSet<GlobalValue *, 4> used_globals;
+#endif
     llvm::Type *used_element_type = llvm::Type::getInt8Ty(M->getContext())->getPointerTo(0);
     GlobalVariable *used = collectUsedGlobalVariables(*M, used_globals, true);
     for (auto *GV : used_globals) {
