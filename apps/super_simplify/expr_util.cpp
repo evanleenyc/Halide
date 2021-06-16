@@ -524,7 +524,7 @@ vector<Expr> generate_reassociated_variants(const Expr &e) {
     return {e};
 }
 
-std::ostream& operator << (std::ostream& os, const IRNodeType& t) {
-    os << static_cast<std::underlying_type<IRNodeType>::type>(t);
-    return os;
-}
+// std::ostream& operator << (std::ostream& os, const IRNodeType& t) {
+//     os << static_cast<std::underlying_type<IRNodeType>::type>(t);
+//     return os;
+// }

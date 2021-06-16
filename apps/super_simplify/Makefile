@@ -32,6 +32,10 @@ $(BIN)/filter_rewrite_rules: filter_rewrite_rules.cpp $(OBJECTS) $(LIB_HALIDE)
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $< $(OBJECTS) -o $@ $(LDFLAGS) -lHalide
 
+$(BIN)/filter_rewrite_rules_v2: filter_rewrite_rules_v2.cpp $(OBJECTS) $(LIB_HALIDE)
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $< $(OBJECTS) -o $@ $(LDFLAGS) -lHalide
+
 $(BIN)/super_simplify: super_simplify_tool.cpp $(OBJECTS) $(LIB_HALIDE)
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $< $(OBJECTS) -o $@ $(LDFLAGS) -lHalide
