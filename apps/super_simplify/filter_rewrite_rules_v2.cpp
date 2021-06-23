@@ -60,6 +60,12 @@ std::ostream &operator<<(std::ostream &stream, const IRNodeType &irtype) {
         case IRNodeType::Sub:
             out = "Sub";
             break;
+        case IRNodeType::IntImm:
+            out = "IntImm";
+            break;
+        case IRNodeType::UIntImm:
+            out = "UIntImm";
+            break;
         default:
             out = "UNDEFINED";
             break;
